@@ -1,5 +1,6 @@
 #used for encryption:
 import base64
+from platform import uname
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -122,7 +123,7 @@ def logOn():
     return hasher('check', userInput, storedHash), generateKey(userInput)
         
 #Change master key allows the user to change the master password
-def changeMasterKey(timeoutMessage):
+def changeMasterKey(timeoutMessage, encryptionKey):
     #make the user enter the password twice to ensure they have entered the new password correctly
     userInput = getpass(prompt='Please enter the new master password: ')
     checkUserInput = getpass(prompt='Please re-enter the new master password: ')
@@ -130,21 +131,33 @@ def changeMasterKey(timeoutMessage):
     if len(timeoutMessage) > 0:
         print('Error: Your session has timed out, you will need to log in again')
         return 'timeout'
-    #if the two passwords match then update the stored hash of the master key
+    #if the two passwords match then update the stored hash of the master key, and re-encrypt all passwords
     elif userInput == checkUserInput:
         #get the dictionary of stored data
         storedData = getStoredData()
         #update this dictionary with the new master password hash.
         storedData['Master'] = hasher('hash', userInput)
+        #re-encrypt all passwords:
+        newEncryptionKey = generateKey(userInput)
+        fernetOldKey = Fernet(encryptionKey)
+        fernetNewKey = Fernet(newEncryptionKey)
+        for title in storedData.keys():
+            if title != 'Master' and title != 'TimerStore':
+                username, encryptedPassword = storedData[title].split('|')
+                decryptedPassword =  fernetOldKey.decrypt(encryptedPassword.encode())
+                newEncryptedPassword = fernetNewKey.encrypt(decryptedPassword).decode()
+                storedData[title] = f'{username}|{newEncryptedPassword}'
         #overwrite the userData.txt file with the update dictionary 
         directory = os.path.dirname(os.path.realpath(__file__))
         with open(directory + '/userData.txt', 'w') as file:
             for key in storedData.keys():
                 print(f'{key} {storedData[key]}\n', file=file)
         print('Master password successfully changed!')
+        return newEncryptionKey
     #if the passwords do not match return the user to the main menu
     else:
         print('Error: Those passwords did not match')
+        return None
 
 #save new service allows the user to add usernames and passwords to the system
 def saveNewService(timeoutMessage, encryptionKey):
@@ -375,7 +388,9 @@ def main():
             elif selection == '3' and len(timeoutMessage) == 0:
                 selection = deleteService(timeoutMessage)
             elif selection == '4' and len(timeoutMessage) == 0:
-                selection = changeMasterKey(timeoutMessage)
+                selection = changeMasterKey(timeoutMessage, encryptionKey)
+                if selection != 'timeout' and selection != None:
+                    encryptionKey = selection
             elif selection == '5' and len(timeoutMessage) == 0:
                 selection = changeLoginTimout(timeoutTimer, timeoutMessage)
                 if selection != 'timeout':
